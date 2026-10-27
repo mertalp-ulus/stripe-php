@@ -184,6 +184,24 @@ certificates, but it's possible to configure your own:
 \Stripe\Stripe::setCABundlePath("path/to/ca/bundle");
 ```
 
+Keep custom CA bundles and operating system CA packages up to date. Some libcurl
+builds also trust certificates in a default CA directory (`CURLOPT_CAPATH`), even
+when a CA bundle is configured. Updating the bundle alone does not remove trust
+provided by that directory. Update both trust sources, or explicitly configure
+`CURLOPT_CAPATH` to point to an existing empty directory when only the configured
+bundle should be trusted:
+
+```php
+\Stripe\ApiRequestor::setHttpClient(
+    new \Stripe\HttpClient\CurlClient([\CURLOPT_CAPATH => "/path/to/empty-directory"])
+);
+```
+
+This example replaces the HTTP client; incorporate the option into an existing
+custom client's configuration when applicable. Keep certificate verification
+enabled. See [the eMudhra security advisory](https://github.com/stripe/stripe-php/issues/2180)
+for context.
+
 ### Configuring Automatic Retries
 
 The library can be configured to automatically retry requests that fail due to
@@ -313,6 +331,14 @@ Update bundled CA certificates from the [Mozilla cURL release][curl]:
 
 ```bash
 ./update_certs.php
+```
+
+After refreshing the bundle, run its offline regression test. This command uses
+the installed development dependencies but does not require `stripe-mock` or
+network access:
+
+```bash
+php vendor/bin/phpunit --no-configuration --bootstrap tests/TestCase.php tests/Stripe/CaBundleTest.php
 ```
 
 The library uses [PHP CS Fixer][php-cs-fixer] for code formatting. Code must be formatted before PRs are submitted, otherwise CI will fail. Run the formatter with:
