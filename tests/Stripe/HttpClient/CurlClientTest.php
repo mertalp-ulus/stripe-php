@@ -180,6 +180,92 @@ final class CurlClientTest extends \Stripe\TestCase
         self::assertSame($withOptionsArray->getDefaultOptions(), $optionsArray);
     }
 
+    /**
+     * @dataProvider provideDefaultCaDirectoryCases
+     *
+     * @param string $sslBackend
+     * @param bool $supportsIsolation
+     */
+    public function testDefaultCaDirectory($sslBackend, $supportsIsolation)
+    {
+        $client = new CurlClient();
+        $userAgentInfo = new \ReflectionProperty(CurlClient::class, 'userAgentInfo');
+        $userAgentInfo->setAccessible(true);
+        $userAgentInfo->setValue($client, ['ssllib' => $sslBackend]);
+        $opts = $this->constructCurlOptionsMethod->invoke($client, 'get', '', [], '', [], 'v1', 0);
+
+        self::assertSame(\Stripe\Stripe::getCABundlePath(), $opts[\CURLOPT_CAINFO]);
+        if ($supportsIsolation && '\\' !== \DIRECTORY_SEPARATOR) {
+            $directory = \realpath(\dirname(__DIR__, 3) . '/data/empty-ca-directory');
+            self::assertNotFalse($directory);
+            self::assertArrayHasKey(\CURLOPT_CAPATH, $opts);
+            self::assertSame($directory, \realpath($opts[\CURLOPT_CAPATH]));
+            self::assertSame(['.', '..', 'README.md'], \scandir($directory));
+        } else {
+            self::assertArrayNotHasKey(\CURLOPT_CAPATH, $opts);
+        }
+    }
+
+    public static function provideDefaultCaDirectoryCases(): iterable
+    {
+        return [
+            ['OpenSSL/1.0.2k-fips', true],
+            ['OpenSSL/3.5.8', true],
+            ['LibreSSL/3.3.6', true],
+            ['BoringSSL', true],
+            ['AWS-LC/1.36.0', true],
+            ['(wolfSSL/5.5.4) (GnuTLS/3.8.0) OpenSSL/3.5.8', true],
+            ['(OpenSSL/3.5.8) GnuTLS/3.8.0', false],
+            ['GnuTLS/3.8.0', false],
+            ['mbedTLS/3.6.0', false],
+            ['wolfSSL/5.5.4', false],
+            ['Schannel', false],
+            ['SecureTransport', false],
+            ['rustls/0.23.0', false],
+            ['OtherTLS', false],
+            ['', false],
+        ];
+    }
+
+    public function testExplicitCaDirectoryOptionsArePreserved()
+    {
+        foreach (['/custom/ca-directory', '', null] as $directory) {
+            foreach ([
+                [\CURLOPT_CAPATH => $directory],
+                static function () use ($directory) {
+                    return [\CURLOPT_CAPATH => $directory];
+                },
+            ] as $defaults) {
+                $client = new CurlClient($defaults);
+                $method = new \ReflectionMethod(CurlClient::class, 'constructRequest');
+                $method->setAccessible(true);
+                list($opts) = $method->invoke($client, 'get', 'https://example.com', [], [], false, 'v1', 0);
+                self::assertArrayHasKey(\CURLOPT_CAPATH, $opts);
+                self::assertSame($directory, $opts[\CURLOPT_CAPATH]);
+            }
+        }
+    }
+
+    public function testCustomCaBundleAndSslOptionsArePreserved()
+    {
+        $original = \Stripe\Stripe::getCABundlePath();
+
+        try {
+            \Stripe\Stripe::setCABundlePath('/custom/ca-bundle.pem');
+            $client = new CurlClient();
+            $opts = $this->constructCurlOptionsMethod->invoke($client, 'get', '', [], '', [\CURLOPT_SSL_OPTIONS => 0], 'v1', 0);
+            self::assertSame('/custom/ca-bundle.pem', $opts[\CURLOPT_CAINFO]);
+            self::assertSame(0, $opts[\CURLOPT_SSL_OPTIONS]);
+
+            if (\defined('CURLSSLOPT_NATIVE_CA')) {
+                $opts = $this->constructCurlOptionsMethod->invoke($client, 'get', '', [], '', [\CURLOPT_SSL_OPTIONS => \CURLSSLOPT_NATIVE_CA], 'v1', 0);
+                self::assertSame(\CURLSSLOPT_NATIVE_CA, $opts[\CURLOPT_SSL_OPTIONS]);
+            }
+        } finally {
+            \Stripe\Stripe::setCABundlePath($original);
+        }
+    }
+
     public function testShouldRetryOnTimeout()
     {
         $curlClient = new CurlClient();

@@ -184,12 +184,19 @@ certificates, but it's possible to configure your own:
 \Stripe\Stripe::setCABundlePath("path/to/ca/bundle");
 ```
 
-Keep custom CA bundles and operating system CA packages up to date. Some libcurl
-builds also trust certificates in a default CA directory (`CURLOPT_CAPATH`), even
-when a CA bundle is configured. Updating the bundle alone does not remove trust
-provided by that directory. Update both trust sources, or explicitly configure
-`CURLOPT_CAPATH` to point to an existing empty directory when only the configured
-bundle should be trusted:
+On Unix clients using OpenSSL, LibreSSL, BoringSSL, or AWS-LC, the SDK defaults
+`CURLOPT_CAPATH` to a packaged directory without CA certificates. This prevents
+libcurl's compiled-in CA directory from silently supplementing the configured
+bundle. Explicit `CURLOPT_CAPATH` settings, including callable client options,
+are preserved. Applications that need private CA certificates should include
+them in their configured bundle or explicitly configure their maintained CA
+directory.
+
+Windows and other TLS backends retain their existing trust behavior. Keep custom
+CA bundles and all other trust sources in use up to date, including explicitly
+enabled native CA stores and HTTPS-proxy trust. Those sources are not managed by
+this default. Where the TLS backend supports it, an existing empty directory can
+also be configured explicitly:
 
 ```php
 \Stripe\ApiRequestor::setHttpClient(
@@ -201,6 +208,9 @@ This example replaces the HTTP client; incorporate the option into an existing
 custom client's configuration when applicable. Keep certificate verification
 enabled. See [the eMudhra security advisory](https://github.com/stripe/stripe-php/issues/2180)
 for context.
+
+Restart long-running clients or workers after deploying trust updates so cached
+TLS connections and certificate stores are replaced.
 
 ### Configuring Automatic Retries
 

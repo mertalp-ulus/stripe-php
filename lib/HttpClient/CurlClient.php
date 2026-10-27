@@ -26,6 +26,8 @@ if (!\defined('CURL_HTTP_VERSION_2TLS')) {
 
 class CurlClient implements ClientInterface, StreamingClientInterface
 {
+    private const DEFAULT_CA_PATH = __DIR__ . '/../../data/empty-ca-directory';
+
     protected static $instance;
 
     public static function instance()
@@ -320,6 +322,14 @@ class CurlClient implements ClientInterface, StreamingClientInterface
         $opts[\CURLOPT_TIMEOUT] = $this->timeout;
         $opts[\CURLOPT_HTTPHEADER] = $headers;
         $opts[\CURLOPT_CAINFO] = Stripe::getCABundlePath();
+        if ('\\' !== \DIRECTORY_SEPARATOR && !\array_key_exists(\CURLOPT_CAPATH, $opts)) {
+            // MultiSSL lists inactive backends in parentheses.
+            $sslBackend = \trim(\preg_replace('/\([^)]*\)/', '', $this->userAgentInfo['ssllib']));
+            if (\preg_match('/^(OpenSSL|LibreSSL|BoringSSL|AWS-LC)(?:\/|$)/', $sslBackend)) {
+                // OpenSSL otherwise supplements CAINFO with its compiled-in CA directory.
+                $opts[\CURLOPT_CAPATH] = self::DEFAULT_CA_PATH;
+            }
+        }
         if (!Stripe::getVerifySslCerts()) {
             $opts[\CURLOPT_SSL_VERIFYPEER] = false;
         }
@@ -520,7 +530,7 @@ class CurlClient implements ClientInterface, StreamingClientInterface
 
             $shouldRetry = false;
             $rbody = null;
-            $this->resetCurlHandle();
+            $this->resetCurlHandle($opts);
             \curl_setopt_array($this->curlHandle, $opts);
             $result = \curl_exec($this->curlHandle);
             $errno = \curl_errno($this->curlHandle);
@@ -575,7 +585,7 @@ class CurlClient implements ClientInterface, StreamingClientInterface
             };
             $opts[\CURLOPT_HEADERFUNCTION] = $headerCallback;
 
-            $this->resetCurlHandle();
+            $this->resetCurlHandle($opts);
             \curl_setopt_array($this->curlHandle, $opts);
             $rbody = \curl_exec($this->curlHandle);
 
@@ -766,13 +776,28 @@ class CurlClient implements ClientInterface, StreamingClientInterface
     /**
      * Resets the curl handle. If the handle is not already initialized, or if persistent
      * connections are disabled, the handle is reinitialized instead.
+     *
+     * @param array $opts cURL options
      */
-    private function resetCurlHandle()
+    private function resetCurlHandle($opts)
     {
         if (null !== $this->curlHandle && $this->getEnablePersistentConnections()) {
             \curl_reset($this->curlHandle);
         } else {
             $this->initCurlHandle();
+        }
+
+        if (isset($opts[\CURLOPT_CAINFO], $opts[\CURLOPT_CAPATH]) && self::DEFAULT_CA_PATH === $opts[\CURLOPT_CAPATH]) {
+            // Apply required trust before optional settings that some cURL builds reject.
+            if (!\curl_setopt_array($this->curlHandle, [
+                \CURLOPT_CAINFO => $opts[\CURLOPT_CAINFO],
+                \CURLOPT_CAPATH => self::DEFAULT_CA_PATH,
+            ])) {
+                $message = \curl_error($this->curlHandle);
+                $this->closeCurlHandle();
+
+                throw new Exception\ApiConnectionException('Could not configure the CA bundle and isolated CA directory: ' . $message);
+            }
         }
     }
 
